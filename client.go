@@ -1,6 +1,7 @@
 package sarama
 
 import (
+	"log"
 	"math/rand"
 	"sort"
 	"sync"
@@ -439,6 +440,7 @@ func (client *client) RefreshMetadata(topics ...string) error {
 	if client.conf.Metadata.Timeout > 0 {
 		deadline = time.Now().Add(client.conf.Metadata.Timeout)
 	}
+	Logger.Printf("fetching metadata, going to intenral tryRefreshMetadata with deadline: +%v", deadline)
 	return client.tryRefreshMetadata(topics, client.conf.Metadata.Retry.Max, deadline)
 }
 
@@ -564,6 +566,7 @@ func (client *client) resurrectDeadBrokers() {
 
 	Logger.Printf("client/brokers resurrecting %d dead seed brokers", len(client.deadSeeds))
 	client.seedBrokers = append(client.seedBrokers, client.deadSeeds...)
+	Logger.Printf("client seed brokers after resurrection: %+v", client.seedBrokers)
 	client.deadSeeds = nil
 }
 
@@ -745,13 +748,16 @@ func (client *client) tryRefreshMetadata(topics []string, attemptsRemaining int,
 	pastDeadline := func(backoff time.Duration) bool {
 		if !deadline.IsZero() && time.Now().Add(backoff).After(deadline) {
 			// we are past the deadline
+			Logger.Println("pastDeadline time limit reached")
 			return true
 		}
 		return false
 	}
 	retry := func(err error) error {
+		log.Println("retrying fetch meta data")
 		if attemptsRemaining > 0 {
 			backoff := client.computeBackoff(attemptsRemaining)
+			//Logger.Printf("attempts remaning: %d with backoff: %+v", attemptsRemaining, backoff)
 			if pastDeadline(backoff) {
 				Logger.Println("client/metadata skipping last retries as we would go past the metadata timeout")
 				return err
@@ -767,6 +773,7 @@ func (client *client) tryRefreshMetadata(topics []string, attemptsRemaining int,
 
 	broker := client.any()
 	for ; broker != nil && !pastDeadline(0); broker = client.any() {
+		Logger.Printf("Attempting to use broker %s to fetch metadata", broker.addr)
 		allowAutoTopicCreation := true
 		if len(topics) > 0 {
 			Logger.Printf("client/metadata fetching metadata for %v from broker %s\n", topics, broker.addr)
@@ -781,7 +788,9 @@ func (client *client) tryRefreshMetadata(topics []string, attemptsRemaining int,
 		} else if client.conf.Version.IsAtLeast(V0_10_0_0) {
 			req.Version = 1
 		}
+		Logger.Printf("metadata request to send to Kafka: %+v", req)
 		response, err := broker.GetMetadata(req)
+		Logger.Printf("metadata response from kafka server: %+v, with error: %e", response, err)
 		switch err.(type) {
 		case nil:
 			allKnownMetaData := len(topics) == 0
@@ -795,6 +804,7 @@ func (client *client) tryRefreshMetadata(topics []string, attemptsRemaining int,
 
 		case PacketEncodingError:
 			// didn't even send, return the error
+			Logger.Println("failed encoding packet, the request was not sent to the Kafka server")
 			return err
 
 		case KError:
@@ -809,13 +819,16 @@ func (client *client) tryRefreshMetadata(topics []string, attemptsRemaining int,
 				return err
 			}
 			// else remove that broker and try again
-			Logger.Printf("client/metadata got error from broker %d while fetching metadata: %v\n", broker.ID(), err)
+			Logger.Printf("client/metadata got error from broker %d while fetching metadata: %v\n, client netconfig timeouts were: %+v", broker.ID(), err, client.conf.Net)
+			Logger.Printf("closing + deregistering broker: %s", broker.addr)
 			_ = broker.Close()
 			client.deregisterBroker(broker)
 
 		default:
+			Logger.Printf("error that did not match Kafka Server error or packet encoding error: %e", err)
 			// some other error, remove that broker and try again
 			Logger.Printf("client/metadata got error from broker %d while fetching metadata: %v\n", broker.ID(), err)
+			Logger.Printf("closing + deregistering broker: %s", broker.addr)
 			_ = broker.Close()
 			client.deregisterBroker(broker)
 		}
@@ -826,7 +839,7 @@ func (client *client) tryRefreshMetadata(topics []string, attemptsRemaining int,
 		return retry(ErrOutOfBrokers)
 	}
 
-	Logger.Println("client/metadata no available broker to send metadata request to")
+	Logger.Println("client/metadata no available broker to send metadata request to, will attempt to resurrect dead brokers")
 	client.resurrectDeadBrokers()
 	return retry(ErrOutOfBrokers)
 }

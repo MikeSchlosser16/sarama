@@ -197,7 +197,7 @@ func (b *Broker) Open(conf *Config) error {
 				if err == nil {
 					Logger.Printf("Closed connection to broker %s\n", b.addr)
 				} else {
-					Logger.Printf("Error while closing connection to broker %s: %s\n", b.addr, err)
+					Logger.Printf("Error while closing connection to broker in Open %s: %s\n", b.addr, err)
 				}
 				b.conn = nil
 				atomic.StoreInt32(&b.opened, 0)
@@ -252,7 +252,7 @@ func (b *Broker) Close() error {
 	if err == nil {
 		Logger.Printf("Closed connection to broker %s\n", b.addr)
 	} else {
-		Logger.Printf("Error while closing connection to broker %s: %s\n", b.addr, err)
+		Logger.Printf("Error while closing connection in close to broker %s: %s\n", b.addr, err)
 	}
 
 	atomic.StoreInt32(&b.opened, 0)
